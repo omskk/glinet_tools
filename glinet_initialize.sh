@@ -147,14 +147,24 @@ install_openclash() {
     URL="${PROXY_PREFIX}https://github.com/vernesong/OpenClash/releases/download/${VERSION}/luci-app-openclash_${VER_NUM}_all.ipk"
 
     log "[✓] 目标版本: $VERSION"
-    log "[⚡] 正在安装..."
+    log "[⚡] 正在下载..."
 
-    if opkg install "$URL"; then
-        log "[✓] 安装成功！"
-        /etc/init.d/openclash enable 2>/dev/null
-        /etc/init.d/openclash start 2>/dev/null && log "[+] 服务已启动"
+    # 修复 Illegal file name 错误：先下载到本地再安装
+    TMP_FILE="/tmp/openclash.ipk"
+    if uclient-fetch -qO "$TMP_FILE" "$URL" 2>/dev/null; then
+        log "[⚡] 下载完成，开始安装..."
+        if opkg install "$TMP_FILE"; then
+            log "[✓] 安装成功！"
+            /etc/init.d/openclash enable 2>/dev/null
+            /etc/init.d/openclash start 2>/dev/null && log "[+] 服务已启动"
+        else
+            log "[!] 安装失败，尝试强制修复依赖..."
+            opkg install "$TMP_FILE" --force-depends && log "[!] 强制安装完成"
+        fi
+        rm -f "$TMP_FILE"
     else
-        opkg install "$URL" --force-depends && log "[!] 强制安装完成"
+        err "文件下载失败，请检查网络"
+        return 1
     fi
 }
 
@@ -162,8 +172,16 @@ install_openclash() {
 # 工具: 通过 URL 安装 IPK
 install_ipk_url() {
     [ -z "$1" ] && { err "请提供下载链接"; return; }
-    log "[+] 开始直接安装: $1"
-    opkg install "$1" || log "[!] 安装失败，请检查 URL 或依赖"
+    # 修复：先下载后安装，避免 URL 解析错误
+    tmp_file="/tmp/manual_install.ipk"
+    log "[+] 正在下载: $1"
+    if uclient-fetch -qO "$tmp_file" "$1" 2>/dev/null; then
+        log "[+] 开始安装..."
+        opkg install "$tmp_file" || log "[!] 安装失败"
+        rm -f "$tmp_file"
+    else
+        err "下载失败，请检查链接"
+    fi
 }
 
 # --- 主菜单 ---
