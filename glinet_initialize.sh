@@ -78,7 +78,7 @@ install_docker() {
     fi
 }
 
-# 功能1: 安装 OpenClash (三级容灾版)
+# 功能1: 安装 OpenClash (三级容灾版 - 无手动输入)
 install_openclash() {
     log "[+] 准备安装 OpenClash..."
 
@@ -88,24 +88,36 @@ install_openclash() {
     log "[+] 更新软件包列表 (用于处理依赖)..."
     opkg update
 
-    # === 阶段一：获取下载地址 (三级策略) ===
+    # === 阶段一：获取下载地址 (双重策略) ===
     log "[+] 正在获取最新版本信息..."
     API_URL="https://api.github.com/repos/vernesong/OpenClash/releases/latest"
     ORIGIN_URL=""
 
     # 策略A: 官方 API (3秒极速超时，不行就撤)
+    log "[DEBUG] 正在尝试访问官方 API: $API_URL"
     ORIGIN_URL=$(wget -T 3 -qO- "$API_URL" 2>/dev/null | grep -o 'https://[^"]*luci-app-openclash[^"]*\.ipk' | head -n 1)
+
+    if [ -n "$ORIGIN_URL" ]; then
+        log "[DEBUG] 官方 API 获取成功: $ORIGIN_URL"
+    else
+        log "[DEBUG] 官方 API 获取失败或超时"
+    fi
 
     # 策略B: 镜像页面爬取 (如果 API 挂了，爬取 HTML 页面)
     if [ -z "$ORIGIN_URL" ]; then
         log "[!] 官方 API 连接超时，切换至镜像页面抓取..."
         MIRROR_PAGE="https://mirror.ghproxy.com/https://github.com/vernesong/OpenClash/releases/latest"
+
+        log "[DEBUG] 正在尝试访问镜像页面: $MIRROR_PAGE"
         # 抓取相对路径
         REL_PATH=$(wget -T 10 -qO- "$MIRROR_PAGE" 2>/dev/null | grep -o '/vernesong/OpenClash/releases/download/[^"]*\.ipk' | head -n 1)
 
         if [ -n "$REL_PATH" ]; then
             ORIGIN_URL="https://github.com${REL_PATH}"
             log "[✓] 已通过镜像页面成功获取版本信息"
+            log "[DEBUG] 解析到的原始链接: $ORIGIN_URL"
+        else
+            log "[DEBUG] 镜像页面抓取失败，未能匹配到 ipk 链接"
         fi
     fi
 
@@ -116,19 +128,9 @@ install_openclash() {
         DOWNLOAD_URL="https://mirror.ghproxy.com/$ORIGIN_URL"
         log "[+] 发现最新版: $(basename "$ORIGIN_URL")"
     else
-        # 策略C: 最终兜底 (手动输入)
+        # 失败直接退出，不再请求手动输入
         err "自动获取版本失败！(官方API和镜像源均无法访问)"
-        printf "请手动粘贴 OpenClash 的下载链接 (.ipk): "
-        # 强制从终端读取
-        read -r MANUAL_URL < /dev/tty
-
-        if [ -n "$MANUAL_URL" ]; then
-            DOWNLOAD_URL="$MANUAL_URL"
-            log "[+] 使用手动提供的链接..."
-        else
-            err "未输入链接，操作取消"
-            return
-        fi
+        return
     fi
     # ==========================================
 
