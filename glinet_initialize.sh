@@ -16,7 +16,7 @@ src/gz customluci http://glinet.83970255.xyz/?f=/mt798x-openwrt21/luci"
 
 # --- 核心功能区 ---
 
-# 功能1: 初始化菜单 (内部逻辑: 解锁隐藏项)
+# 功能3: 解锁AdGuardHome (原初始化菜单)
 # 作用: 修复简体中文环境下部分菜单(如AdGuard Home)不显示的问题
 init_menu() {
     log "[+] 开始执行系统菜单初始化..."
@@ -34,7 +34,7 @@ init_menu() {
     log "[✓] 菜单初始化完成！请刷新浏览器 (建议 Ctrl+F5)"
 }
 
-# 功能2: 还原配置
+# 功能4: 还原CN (还原配置)
 restore_config() {
     log "[+] 正在还原配置..."
 
@@ -51,7 +51,7 @@ restore_config() {
     fi
 }
 
-# 功能3: 安装 Docker
+# 功能2: 部署 Docker 环境
 install_docker() {
     log "[+] 初始化 Docker 环境..."
 
@@ -78,67 +78,78 @@ install_docker() {
     fi
 }
 
-# 功能4: 安装 OpenClash (动态获取最新版)
+# 功能1: 安装 OpenClash (三级容灾版)
 install_openclash() {
     log "[+] 准备安装 OpenClash..."
 
-    # 1. 配置软件源 (OpenClash 依赖很多基础库，需要源支持)
     mkdir -p /etc/opkg
     echo "$EXPECTED_FEEDS" > /etc/opkg/customfeeds.conf
 
-    # 2. 必须执行 update 来获取依赖包列表
     log "[+] 更新软件包列表 (用于处理依赖)..."
     opkg update
 
-    # 3. 动态获取最新下载链接
-    log "[+] 正在获取 GitHub 最新版本链接..."
+    # === 阶段一：获取下载地址 (三级策略) ===
+    log "[+] 正在获取最新版本信息..."
     API_URL="https://api.github.com/repos/vernesong/OpenClash/releases/latest"
+    ORIGIN_URL=""
 
-    # 使用 wget -qO- 读取 API 返回的 JSON，然后提取 browser_download_url 字段中以 .ipk 结尾的链接
-    DOWNLOAD_URL=$(wget -qO- "$API_URL" | grep -o 'https://[^"]*luci-app-openclash[^"]*\.ipk' | head -n 1)
+    # 策略A: 官方 API (3秒极速超时，不行就撤)
+    ORIGIN_URL=$(wget -T 3 -qO- "$API_URL" 2>/dev/null | grep -o 'https://[^"]*luci-app-openclash[^"]*\.ipk' | head -n 1)
 
-    if [ -z "$DOWNLOAD_URL" ]; then
-        err "获取下载链接失败，请检查网络连接或 GitHub API 状态。"
-        return
+    # 策略B: 镜像页面爬取 (如果 API 挂了，爬取 HTML 页面)
+    if [ -z "$ORIGIN_URL" ]; then
+        log "[!] 官方 API 连接超时，切换至镜像页面抓取..."
+        MIRROR_PAGE="https://mirror.ghproxy.com/https://github.com/vernesong/OpenClash/releases/latest"
+        # 抓取相对路径
+        REL_PATH=$(wget -T 10 -qO- "$MIRROR_PAGE" 2>/dev/null | grep -o '/vernesong/OpenClash/releases/download/[^"]*\.ipk' | head -n 1)
+
+        if [ -n "$REL_PATH" ]; then
+            ORIGIN_URL="https://github.com${REL_PATH}"
+            log "[✓] 已通过镜像页面成功获取版本信息"
+        fi
     fi
 
-    log "[+] 发现最新版: $(basename "$DOWNLOAD_URL")"
+    DOWNLOAD_URL=""
 
-    # 4. 下载到临时目录
-    TMP_FILE="/tmp/openclash.ipk"
-    log "[+] 正在下载..."
-    if wget -O "$TMP_FILE" "$DOWNLOAD_URL"; then
-        log "[+] 下载完成，开始安装..."
-
-        # 5. 执行安装 (opkg install ipk文件 会自动尝试从源里下载依赖)
-        if opkg install "$TMP_FILE"; then
-            log "[✓] OpenClash 安装成功！请刷新后台查看"
-        else
-            log "[!] 安装遇到依赖错误，尝试强制修复..."
-            opkg install "$TMP_FILE" --force-depends
-        fi
-
-        # 清理垃圾
-        rm "$TMP_FILE"
+    if [ -n "$ORIGIN_URL" ]; then
+        # 自动获取成功，添加加速前缀
+        DOWNLOAD_URL="https://mirror.ghproxy.com/$ORIGIN_URL"
+        log "[+] 发现最新版: $(basename "$ORIGIN_URL")"
     else
-        err "文件下载失败"
+        # 策略C: 最终兜底 (手动输入)
+        err "自动获取版本失败！(官方API和镜像源均无法访问)"
+        printf "请手动粘贴 OpenClash 的下载链接 (.ipk): "
+        # 强制从终端读取
+        read -r MANUAL_URL < /dev/tty
+
+        if [ -n "$MANUAL_URL" ]; then
+            DOWNLOAD_URL="$MANUAL_URL"
+            log "[+] 使用手动提供的链接..."
+        else
+            err "未输入链接，操作取消"
+            return
+        fi
+    fi
+    # ==========================================
+
+    # === 阶段二：直接安装 (OPKG 直连) ===
+    log "[+] 正在通过 URL 直接安装..."
+    log "    源: $DOWNLOAD_URL"
+
+    # 直接使用 opkg install URL，省去下载到本地的步骤
+    if opkg install "$DOWNLOAD_URL"; then
+        log "[✓] OpenClash 安装成功！请刷新后台查看"
+    else
+        log "[!] 安装失败或依赖报错，尝试强制修复..."
+        opkg install "$DOWNLOAD_URL" --force-depends
     fi
 }
 
-# 工具: 通过 URL 安装 IPK (隐藏功能，供手动调用)
-# 用法: install_ipk_url "https://example.com/app.ipk"
+# 工具: 通过 URL 安装 IPK
 install_ipk_url() {
     [ -z "$1" ] && { err "请提供下载链接"; return; }
-    tmp_file="/tmp/temp_install.ipk"
-    log "[+] 正在下载: $1"
-    if wget -O "$tmp_file" "$1"; then
-        log "[+] 开始安装..."
-        opkg install "$tmp_file"
-        rm "$tmp_file"
-        log "[✓] 安装完成"
-    else
-        err "下载失败，请检查网络"
-    fi
+    log "[+] 开始直接安装: $1"
+    opkg install "$1" || log "[!] 安装失败，请检查 URL 或依赖"
 }
 
 # --- 主菜单 ---
@@ -154,11 +165,7 @@ while :; do
     echo "========================"
     printf "请输入选项 [1-5]: "
 
-    # 核心修复: 强制从 /dev/tty 读取输入
-    # 解决 curl | sh 管道运行时的无限死循环问题
     if ! read -r c < /dev/tty 2>/dev/null; then read -r c; fi
-
-    # 如果非交互模式下读取为空，强制退出防止死循环
     [ -z "$c" ] && exit 0
 
     case $c in
