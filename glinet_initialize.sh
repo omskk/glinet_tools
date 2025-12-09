@@ -121,9 +121,9 @@ while :; do
     echo
     echo "========================"
     echo "   GL.iNet 一键初始化"
-    echo " 1. 解锁海外"
+    echo " 1. 安装OpenClash"
     echo " 2. 部署 Docker 环境"
-    echo " 3. 初始化功能菜单 (修复显示)"
+    echo " 3. 解锁AdGuardHome"
     echo " 4. 还原CN"
     echo " 5. 退出"
     echo "========================"
