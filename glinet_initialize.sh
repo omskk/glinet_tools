@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# --- 日志函数 (修复：使用 printf 替代 echo -e 以确保 OpenWrt 兼容性) ---
+# --- 1. 日志配置 (使用 printf 修复 OpenWrt 颜色兼容性) ---
 log() {
     printf "\033[32m[%s]\033[0m %s\n" "$(date +'%Y-%m-%d %H:%M:%S')" "$1"
 }
@@ -9,7 +9,7 @@ err() {
     printf "\033[31m[%s] ERROR: %s\033[0m\n" "$(date +'%Y-%m-%d %H:%M:%S')" "$1"
 }
 
-# 配置变量
+# --- 2. 核心变量配置 ---
 EXPECTED_FEEDS="src/gz custombase http://glinet.83970255.xyz/?f=/mt798x-openwrt21/base
 src/gz custompackages http://glinet.83970255.xyz/?f=/mt798x-openwrt21/packages
 src/gz customluci http://glinet.83970255.xyz/?f=/mt798x-openwrt21/luci"
@@ -18,10 +18,10 @@ MENU_DIR="/usr/share/oui/menu.d"
 DOCKER_PKGS="docker dockerd docker-compose luci-app-dockerman luci-i18n-dockerman-zh-cn"
 FEED_FILE="/etc/opkg/customfeeds.conf"
 
-# --- 启动：配置基础环境 ---
+# --- 3. 环境初始化 ---
 log "[+] 开始环境检查..."
 
-# 1. 配置源
+# 3.1 配置软件源
 mkdir -p /etc/opkg
 if [ -f "$FEED_FILE" ] && [ "$(cat "$FEED_FILE")" = "$EXPECTED_FEEDS" ]; then
     log "[✓] 软件源配置一致，跳过写入"
@@ -30,15 +30,15 @@ else
     log "[+] 软件源已更新"
 fi
 
-# 2. 更新列表
+# 3.2 更新列表 (失败仅警告，不退出)
 log "[+] 更新软件包列表..."
 if opkg update; then
     log "[✓] 列表更新成功"
 else
-    err "列表更新失败，请检查网络或源地址。脚本将继续运行..."
+    err "列表更新失败，请检查网络。脚本将继续尝试运行..."
 fi
 
-# 3. 检查必备包
+# 3.3 检查必备依赖
 log "[+] 检查必备依赖: luci-lib-ipkg luci-compat"
 MISSING_PKGS=""
 for pkg in luci-lib-ipkg luci-compat; do
@@ -54,23 +54,26 @@ else
     log "[✓] 必备依赖已安装"
 fi
 
-# --- 核心功能 ---
+# --- 4. 功能函数 ---
+
 unlock_hidden() {
     log "[+] 正在解锁隐藏功能 (AdGuard Home 等)..."
     [ ! -d "$MENU_DIR" ] && { err "菜单目录 $MENU_DIR 不存在"; return; }
 
+    # 查找包含 lang_hide 的文件
     files=$(grep -l '"lang_hide"' "$MENU_DIR"/*.json 2>/dev/null)
 
     if [ -z "$files" ]; then
-        log "[!] 未找到含有隐藏限制的文件"
+        log "[!] 未找到含有隐藏限制的文件 (可能已解锁或固件版本不同)"
         return
     fi
 
     for f in $files; do
         bak="$f.bak"
+        # 仅当备份不存在时备份
         [ ! -f "$bak" ] && cp "$f" "$bak" && log "  备份: ${f##*/}"
 
-        # 逻辑：修改 zh-cn 限制为 zh-tw
+        # 核心逻辑：修改 zh-cn 为 zh-tw 以绕过简体中文隐藏限制
         if grep -q '"lang_hide".*"zh-cn"' "$f"; then
             sed -i '/"lang_hide"/s/"zh-cn"/"zh-tw"/' "$f"
             log "  解锁 (单行): ${f##*/}"
@@ -101,13 +104,12 @@ install_docker() {
     if opkg install $DOCKER_PKGS; then
         log "[✓] Docker 安装成功！"
     else
-        err "Docker 安装部分失败，建议手动检查报错信息"
-        log "尝试修复依赖..."
+        err "Docker 安装部分失败，尝试修复依赖..."
         opkg install $DOCKER_PKGS --force-depends
     fi
 }
 
-# --- 主菜单 ---
+# --- 5. 主菜单 (修复无限循环 Bug) ---
 while :; do
     echo
     echo "========================"
@@ -121,7 +123,14 @@ while :; do
     echo " 6. 退出"
     echo "========================"
     printf "请输入选项 [1-6]: "
-    read -r c
+
+    # === 关键修复：强制从 /dev/tty 读取输入，解决管道运行时的死循环 ===
+    if [ -c /dev/tty ]; then
+        read -r c < /dev/tty
+    else
+        read -r c
+    fi
+    # ============================================================
 
     case $c in
         1) install_docker ;;
