@@ -81,19 +81,74 @@ install_docker() {
 # 功能1: 安装 OpenClash
 install_openclash() {
     log "[+] 获取最新 OpenClash 版本号..."
-    VERSION=$(uclient-fetch -qO- "https://github.com/vernesong/OpenClash/releases/latest" 2>/dev/null | \
-        grep -o 'href="/vernesong/OpenClash/releases/tag/v[0-9.]*"' | head -n1 | \
-        sed 's|.*tag/||; s/"$//') || {
-        err "获取失败，请检查网络"
+
+    # 定义基础 URL 和默认代理
+    GH_URL="https://github.com/vernesong/OpenClash/releases/latest"
+    PROXY_PREFIX="https://cdn.gh-proxy.org/"
+    VERSION=""
+
+    # 1. 尝试直接获取
+    HTML=$(uclient-fetch -qO- "$GH_URL" 2>/dev/null)
+
+    # 2. 如果直接获取失败，提供手动方案
+    if [ -z "$HTML" ]; then
+        err "直接获取版本失败 (网络超时)"
+        echo "请选择手动方案:"
+        echo " 1. 输入加速代理前缀 (尝试重新获取)"
+        echo " 2. 直接输入版本号 (跳过获取)"
+        printf "请输入选项 [1-2]: "
+
+        if ! read -r CHOICE < /dev/tty 2>/dev/null; then read -r CHOICE; fi
+
+        if [ "$CHOICE" = "1" ]; then
+            printf "请输入加速代理前缀 (例如 https://mirror.ghproxy.com/ ): "
+            if ! read -r USER_PREFIX < /dev/tty 2>/dev/null; then read -r USER_PREFIX; fi
+
+            if [ -n "$USER_PREFIX" ]; then
+                log "[+] 使用加速前缀重试: $USER_PREFIX"
+                HTML=$(uclient-fetch -qO- "${USER_PREFIX}${GH_URL}" 2>/dev/null)
+                PROXY_PREFIX="$USER_PREFIX"
+            else
+                err "未输入前缀，安装取消"
+                return 1
+            fi
+        elif [ "$CHOICE" = "2" ]; then
+             printf "请输入版本号 (例如 v0.48.13): "
+             if ! read -r MANUAL_VER < /dev/tty 2>/dev/null; then read -r MANUAL_VER; fi
+
+             if [ -n "$MANUAL_VER" ]; then
+                 # 自动补全 v 前缀
+                 case "$MANUAL_VER" in
+                    v*) VERSION="$MANUAL_VER" ;;
+                    *) VERSION="v$MANUAL_VER" ;;
+                 esac
+             else
+                 err "未输入版本号，安装取消"
+                 return 1
+             fi
+        else
+            err "无效选项"
+            return 1
+        fi
+    fi
+
+    # 3. 解析版本号 (如果尚未手动设置版本)
+    if [ -z "$VERSION" ]; then
+        VERSION=$(echo "$HTML" | grep -o 'href="/vernesong/OpenClash/releases/tag/v[0-9.]*"' | head -n1 | sed 's|.*tag/||; s/"$//')
+    fi
+
+    if [ -z "$VERSION" ]; then
+        err "版本解析失败，请检查网络或前缀是否有效"
         return 1
-    }
+    fi
 
     VER_NUM=${VERSION#v}
-    # 使用 cdn.gh-proxy.org 加速（支持 Releases）
-    URL="https://cdn.gh-proxy.org/https://github.com/vernesong/OpenClash/releases/download/${VERSION}/luci-app-openclash_${VER_NUM}_all.ipk"
+    # 拼接最终下载链接
+    URL="${PROXY_PREFIX}https://github.com/vernesong/OpenClash/releases/download/${VERSION}/luci-app-openclash_${VER_NUM}_all.ipk"
 
-    log "[✓] 最新版本: $VERSION"
-    log "[⚡] 加速安装中..."
+    log "[✓] 目标版本: $VERSION"
+    log "[⚡] 正在安装..."
+
     if opkg install "$URL"; then
         log "[✓] 安装成功！"
         /etc/init.d/openclash enable 2>/dev/null
