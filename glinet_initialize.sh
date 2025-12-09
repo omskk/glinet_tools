@@ -7,7 +7,7 @@ err() { printf "\033[31m[%s] ERROR: %s\033[0m\n" "$(date +'%Y-%m-%d %H:%M:%S')" 
 # --- 变量配置 ---
 MENU_DIR="/usr/share/oui/menu.d"
 DOCKER_PKGS="docker dockerd docker-compose luci-app-dockerman luci-i18n-dockerman-zh-cn"
-OPENCLASH_PKG="luci-app-openclash"
+# OPENCLASH_PKG 变量不再直接使用，改为动态获取
 
 # 第三方源配置
 EXPECTED_FEEDS="src/gz custombase http://glinet.83970255.xyz/?f=/mt798x-openwrt21/base
@@ -78,25 +78,50 @@ install_docker() {
     fi
 }
 
-# 功能4: 安装 OpenClash
+# 功能4: 安装 OpenClash (动态获取最新版)
 install_openclash() {
     log "[+] 准备安装 OpenClash..."
 
-    # 1. 配置软件源 (OpenClash通常不在官方源，需依赖第三方源)
+    # 1. 配置软件源 (OpenClash 依赖很多基础库，需要源支持)
     mkdir -p /etc/opkg
     echo "$EXPECTED_FEEDS" > /etc/opkg/customfeeds.conf
 
-    # 2. 必须执行 update
-    log "[+] 更新软件包列表..."
+    # 2. 必须执行 update 来获取依赖包列表
+    log "[+] 更新软件包列表 (用于处理依赖)..."
     opkg update
 
-    # 3. 执行安装
-    log "[+] 开始安装 $OPENCLASH_PKG..."
-    if opkg install $OPENCLASH_PKG; then
-        log "[✓] OpenClash 安装成功！请刷新后台查看"
+    # 3. 动态获取最新下载链接
+    log "[+] 正在获取 GitHub 最新版本链接..."
+    API_URL="https://api.github.com/repos/vernesong/OpenClash/releases/latest"
+
+    # 使用 wget -qO- 读取 API 返回的 JSON，然后提取 browser_download_url 字段中以 .ipk 结尾的链接
+    DOWNLOAD_URL=$(wget -qO- "$API_URL" | grep -o 'https://[^"]*luci-app-openclash[^"]*\.ipk' | head -n 1)
+
+    if [ -z "$DOWNLOAD_URL" ]; then
+        err "获取下载链接失败，请检查网络连接或 GitHub API 状态。"
+        return
+    fi
+
+    log "[+] 发现最新版: $(basename "$DOWNLOAD_URL")"
+
+    # 4. 下载到临时目录
+    TMP_FILE="/tmp/openclash.ipk"
+    log "[+] 正在下载..."
+    if wget -O "$TMP_FILE" "$DOWNLOAD_URL"; then
+        log "[+] 下载完成，开始安装..."
+
+        # 5. 执行安装 (opkg install ipk文件 会自动尝试从源里下载依赖)
+        if opkg install "$TMP_FILE"; then
+            log "[✓] OpenClash 安装成功！请刷新后台查看"
+        else
+            log "[!] 安装遇到依赖错误，尝试强制修复..."
+            opkg install "$TMP_FILE" --force-depends
+        fi
+
+        # 清理垃圾
+        rm "$TMP_FILE"
     else
-        log "[!] 安装失败，尝试强制修复依赖..."
-        opkg install $OPENCLASH_PKG --force-depends
+        err "文件下载失败"
     fi
 }
 
