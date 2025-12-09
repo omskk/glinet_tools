@@ -78,74 +78,31 @@ install_docker() {
     fi
 }
 
-# 功能1: 安装 OpenClash (三级容灾版 - 无手动输入)
+# 功能1: 安装 OpenClash
 install_openclash() {
-    log "[+] 准备安装 OpenClash..."
+    log "[+] 获取最新 OpenClash 版本号..."
+    VERSION=$(uclient-fetch -qO- "https://github.com/vernesong/OpenClash/releases/latest" 2>/dev/null | \
+        grep -o 'href="/vernesong/OpenClash/releases/tag/v[0-9.]*"' | head -n1 | \
+        sed 's|.*tag/||; s/"$//') || {
+        err "获取失败，请检查网络"
+        return 1
+    }
 
-    mkdir -p /etc/opkg
-    echo "$EXPECTED_FEEDS" > /etc/opkg/customfeeds.conf
+    VER_NUM=${VERSION#v}
+    # 使用 cdn.gh-proxy.org 加速（支持 Releases）
+    URL="https://cdn.gh-proxy.org/https://github.com/vernesong/OpenClash/releases/download/${VERSION}/luci-app-openclash_${VER_NUM}_all.ipk"
 
-    log "[+] 更新软件包列表 (用于处理依赖)..."
-    opkg update
-
-    # === 阶段一：获取下载地址 (双重策略) ===
-    log "[+] 正在获取最新版本信息..."
-    API_URL="https://api.github.com/repos/vernesong/OpenClash/releases/latest"
-    ORIGIN_URL=""
-
-    # 策略A: 官方 API (3秒极速超时，不行就撤)
-    log "[DEBUG] 正在尝试访问官方 API: $API_URL"
-    ORIGIN_URL=$(wget -T 3 -qO- "$API_URL" 2>/dev/null | grep -o 'https://[^"]*luci-app-openclash[^"]*\.ipk' | head -n 1)
-
-    if [ -n "$ORIGIN_URL" ]; then
-        log "[DEBUG] 官方 API 获取成功: $ORIGIN_URL"
+    log "[✓] 最新版本: $VERSION"
+    log "[⚡] 加速安装中..."
+    if opkg install "$URL"; then
+        log "[✓] 安装成功！"
+        /etc/init.d/openclash enable 2>/dev/null
+        /etc/init.d/openclash start 2>/dev/null && log "[+] 服务已启动"
     else
-        log "[DEBUG] 官方 API 获取失败或超时"
-    fi
-
-    # 策略B: 镜像页面爬取 (如果 API 挂了，爬取 HTML 页面)
-    if [ -z "$ORIGIN_URL" ]; then
-        log "[!] 官方 API 连接超时，切换至镜像页面抓取..."
-        MIRROR_PAGE="https://mirror.ghproxy.com/https://github.com/vernesong/OpenClash/releases/latest"
-
-        log "[DEBUG] 正在尝试访问镜像页面: $MIRROR_PAGE"
-        # 抓取相对路径
-        REL_PATH=$(wget -T 10 -qO- "$MIRROR_PAGE" 2>/dev/null | grep -o '/vernesong/OpenClash/releases/download/[^"]*\.ipk' | head -n 1)
-
-        if [ -n "$REL_PATH" ]; then
-            ORIGIN_URL="https://github.com${REL_PATH}"
-            log "[✓] 已通过镜像页面成功获取版本信息"
-            log "[DEBUG] 解析到的原始链接: $ORIGIN_URL"
-        else
-            log "[DEBUG] 镜像页面抓取失败，未能匹配到 ipk 链接"
-        fi
-    fi
-
-    DOWNLOAD_URL=""
-
-    if [ -n "$ORIGIN_URL" ]; then
-        # 自动获取成功，添加加速前缀
-        DOWNLOAD_URL="https://mirror.ghproxy.com/$ORIGIN_URL"
-        log "[+] 发现最新版: $(basename "$ORIGIN_URL")"
-    else
-        # 失败直接退出，不再请求手动输入
-        err "自动获取版本失败！(官方API和镜像源均无法访问)"
-        return
-    fi
-    # ==========================================
-
-    # === 阶段二：直接安装 (OPKG 直连) ===
-    log "[+] 正在通过 URL 直接安装..."
-    log "    源: $DOWNLOAD_URL"
-
-    # 直接使用 opkg install URL，省去下载到本地的步骤
-    if opkg install "$DOWNLOAD_URL"; then
-        log "[✓] OpenClash 安装成功！请刷新后台查看"
-    else
-        log "[!] 安装失败或依赖报错，尝试强制修复..."
-        opkg install "$DOWNLOAD_URL" --force-depends
+        opkg install "$URL" --force-depends && log "[!] 强制安装完成"
     fi
 }
+
 
 # 工具: 通过 URL 安装 IPK
 install_ipk_url() {
